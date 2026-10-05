@@ -9,6 +9,7 @@ import csv
 import random
 import subprocess
 import base64
+from datetime import datetime
 
 try:
     from selenium import webdriver
@@ -25,9 +26,9 @@ except ImportError as e:
 from core.config import CONFIG
 from core.logger import log
 from core.utils import (
-    load_checkpoint, save_checkpoint, clear_checkpoint, 
+    load_checkpoint, save_checkpoint, clear_checkpoint,
     create_template_csv, build_csv_interactively, wait_for_whatsapp, is_session_active,
-    jitter_sleep, with_retry
+    jitter_sleep, with_retry, schedule_time, target_key, find_resume_index, resolve_path
 )
 from core.client import WhatsAppClient
 
@@ -40,7 +41,8 @@ def main():
         print("   WhatsApp Web Automation Tool")
         print("=" * 60)
         print("")
-        
+        csv_file = CONFIG["targets_file"]
+
         # 1. Ask about Session first
         session_dir = CONFIG['user_data_dir']
         if os.path.exists(session_dir):
@@ -58,19 +60,18 @@ def main():
                     
                 # Clean up previous user's data
                 clear_checkpoint()
-                if os.path.exists("data/targets.csv"):
+                if os.path.exists(csv_file):
                     try:
-                        os.remove("data/targets.csv")
+                        os.remove(csv_file)
                         print("-> Cleared previous user's target list and checkpoint.")
                     except:
                         pass
         print("")
-        csv_file = "data/targets.csv"
         resume = False
         start_index, start_repeat = 0, 0
-        
+
         # 1. Check for checkpoint
-        current_index, current_repeat = load_checkpoint()
+        current_index, current_repeat, resume_key = load_checkpoint()
         if current_index > 0 or current_repeat > 0:
             if input(f"Found checkpoint at target #{current_index + 1}, repeat #{current_repeat + 1}. Resume? (y/n): ").strip().lower() == "y":
                 resume = True
@@ -113,10 +114,10 @@ def main():
                     t_media = []
                     if t_media_raw:
                         for p in [x.strip() for x in t_media_raw.replace('|', ';').split(';') if x.strip()]:
-                            if not os.path.exists(p):
+                            if not os.path.exists(resolve_path(p)):
                                 print(f"Media file '{p}' for {row['Target']} not found. Skipping this file.")
                             else:
-                                t_media.append(p)
+                                t_media.append(resolve_path(p))
                                 
                     t_media_val = t_media if t_media else None
 
@@ -152,25 +153,33 @@ def main():
             print("No recipients found in CSV.")
             return
 
-        # Sort targets chronologically
-        def normalize_time(t):
-            time_str = t.get("time") or ""
-            if time_str and ":" in time_str:
-                try:
-                    parts = time_str.split(":")
-                    # Re-assign normalized time to ensure string comparisons (>=) work later
-                    t["time"] = f"{int(parts[0]):02d}:{int(parts[1]):02d}"
-                    return t["time"]
-                except:
-                    pass
-            return time_str
-            
-        targets.sort(key=normalize_time)
+        # Resolve each Time to its next occurrence and sort chronologically (unscheduled first)
+        now = datetime.now()
+        for t in targets:
+            t["when"] = schedule_time(t["time"], now)
+            if t["time"] and not t["when"]:
+                print(f"Invalid time '{t['time']}' for {t['target']}. Sending immediately.")
+        targets.sort(key=lambda t: t["when"] or datetime.min)
+
+        # The checkpoint stores which target it was on, so find it again even if the CSV changed
+        if resume:
+            found = find_resume_index(targets, start_index, resume_key)
+            if found is None:
+                print("\nThe checkpointed recipient is no longer in targets.csv.")
+                if input("Start from the first recipient instead? (y/n): ").strip().lower() != "y":
+                    return
+                start_index, start_repeat = 0, 0
+            elif found != start_index:
+                print(f"targets.csv changed. Resuming at {targets[found]['target']} (now #{found + 1}).")
+                start_index = found
 
         print("\nExecution Order:")
         for idx, t in enumerate(targets):
-            time_display = t.get("time") or "Immediate"
+            time_display = t["when"].strftime("%a %H:%M") if t["when"] else "Immediate"
             print(f"  {idx+1}. {t['target']} ({time_display})")
+
+        def checkpoint(i, repeat=0):
+            save_checkpoint(i, repeat, target_key(targets[i]) if i < len(targets) else None)
 
         print("\n-> A Chrome window will open.")
         print("   First time or deleted session? Scan the QR code with WhatsApp mobile.")
@@ -260,7 +269,6 @@ def main():
                 return
     
             status = {"success": 0, "fail": 0, "total": len(targets)}
-            idx = start_index
             current_repeat = start_repeat  # Track repeat offset for first target on resume
     
             try:
@@ -281,23 +289,16 @@ def main():
     
                     try:
                         # 1. Scheduled Sending
-                        t_time = t_obj.get("time")
-                        if t_time:
-                            from datetime import datetime
-                            now = datetime.now().strftime("%H:%M")
-                            if now >= t_time:
-                                print(f"  [SCHEDULED] Time {t_time} has already passed (Current: {now}). Sending immediately.")
-                            else:
-                                while True:
-                                    now = datetime.now().strftime("%H:%M")
-                                    if now >= t_time:
-                                        break
-                                    sys.stdout.write(f"\r  [SCHEDULED] Waiting for {t_time} (Current: {now}) ... ")
-                                    sys.stdout.flush()
-                                    time.sleep(10)
-                                    if client.shutdown_flag:
-                                        return
-                                sys.stdout.write("\n")
+                        when = t_obj.get("when")
+                        if when and datetime.now() < when:
+                            while datetime.now() < when:
+                                now = datetime.now().strftime("%H:%M")
+                                sys.stdout.write(f"\r  [SCHEDULED] Waiting for {when:%a %H:%M} (Current: {now}) ... ")
+                                sys.stdout.flush()
+                                time.sleep(10)
+                                if client.shutdown_flag:
+                                    return
+                            sys.stdout.write("\n")
     
                         # 2. Dynamic Message Personalization
                         try:
@@ -323,13 +324,13 @@ def main():
                         def on_repeat_done(repeat_num, _idx=idx):
                             nonlocal current_repeat
                             current_repeat = repeat_num
-                            save_checkpoint(_idx, repeat_num)
+                            checkpoint(_idx, repeat_num)
 
                         client.send_to_chat(actual_msg, t_mode, t_media, t_repeat,
                                             start_repeat=current_repeat,
                                             on_progress=on_repeat_done)
                         status["success"] += 1
-                        save_checkpoint(idx + 1, 0)  # Target fully done, reset repeat
+                        checkpoint(idx + 1, 0)  # Target fully done, reset repeat
                         log.info(f"Done: {t_name}")
                         current_repeat = 0  # Reset for subsequent targets
                     except Exception as e:
@@ -353,10 +354,9 @@ def main():
                 clear_checkpoint()
                 print("All messages sent! Checkpoint cleared.")
             else:
-                # on_progress already saved after last completed repeat
-                # Just ensure it's written one final time
-                save_checkpoint(idx, current_repeat)
-                print(f"Resume checkpoint saved: target #{idx+1}, repeat #{current_repeat}")
+                # Progress is checkpointed after every send; re-saving idx here would
+                # rewind past a completed last target and resend it on resume.
+                print("Progress saved. Run again and choose resume to continue.")
                 
             # Try to close browser (may fail if connection is broken from Ctrl+C)
             try:

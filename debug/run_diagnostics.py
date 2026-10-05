@@ -91,11 +91,12 @@ def run_diagnostics():
             
         # Phase 2: URL Routing
         print_header("Phase 2: URL Routing & Open by Number")
-        if client.open_chat_by_number(test_number):
+        try:
+            client.open_chat_by_number(test_number)
             print("[PASS] URL routing works and chat opened successfully.")
             results["Phase 2: URL Routing"] = "PASS"
-        else:
-            print("[FAIL] Could not open chat by number.")
+        except Exception as e:
+            print(f"[FAIL] Could not open chat by number: {type(e).__name__} - {e}")
             results["Phase 2: URL Routing"] = "FAIL"
             
         time.sleep(2)

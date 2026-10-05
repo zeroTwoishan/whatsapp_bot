@@ -1,7 +1,10 @@
 import os
 
+# Project root, so session/data/log land in the same place whatever folder you run from
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 CONFIG = {
-    "user_data_dir": os.path.abspath("whatsapp_session"),
+    "user_data_dir": os.path.join(BASE_DIR, "whatsapp_session"),
     "explicit_wait": 35,          # Increased for reliability
     "retry_attempts": 3,
     "min_phone_digits": 8,
@@ -14,7 +17,8 @@ CONFIG = {
     # Delay between each recipient (seconds)
     "recipient_delay_min": 0.5,
     "recipient_delay_max": 1.0,
-    "checkpoint_file": "data/checkpoint.json"
+    "checkpoint_file": os.path.join(BASE_DIR, "data", "checkpoint.json"),
+    "targets_file": os.path.join(BASE_DIR, "data", "targets.csv"),
 }
 
 # ========================

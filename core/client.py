@@ -141,7 +141,7 @@ class WhatsAppClient:
             return True
         except TimeoutException:
             log.error(f"Failed to open chat for {digits} (Timeout)")
-            return False
+            raise  # let with_retry retry instead of carrying on with no chat open
 
     def open_chat_by_name(self, name):
         """

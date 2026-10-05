@@ -3,11 +3,16 @@ import time
 import random
 import csv
 import json
+from datetime import timedelta
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import NoSuchElementException
 
-from core.config import CONFIG, READY_SELECTORS
+from core.config import CONFIG, READY_SELECTORS, BASE_DIR
 from core.logger import log
+
+def resolve_path(path):
+    """Relative paths are taken from the project folder, not the current working directory."""
+    return os.path.join(BASE_DIR, path)  # an absolute `path` is returned unchanged
 
 def clean_number(number):
     return "".join(filter(str.isdigit, str(number)))
@@ -76,7 +81,7 @@ def build_csv_interactively(filepath):
         valid_media = []
         if default_media:
             for p in [x.strip() for x in default_media.replace('|', ';').split(';') if x.strip()]:
-                if not os.path.exists(p):
+                if not os.path.exists(resolve_path(p)):
                     print(f"  Warning: File not found: {p}")
                 else:
                     valid_media.append(p)
@@ -107,7 +112,7 @@ def build_csv_interactively(filepath):
             v_media = []
             if t_media:
                 for p in [x.strip() for x in t_media.replace('|', ';').split(';') if x.strip()]:
-                    if not os.path.exists(p):
+                    if not os.path.exists(resolve_path(p)):
                         print(f"  Warning: File not found: {p}")
                     else:
                         v_media.append(p)
@@ -136,18 +141,47 @@ def build_csv_interactively(filepath):
     print(f"\nSuccessfully saved {len(targets)} targets to {os.path.abspath(filepath)}\n")
     return True
 
+def schedule_time(time_str, now):
+    """Next HH:MM on or after `now` (minute precision). Times already passed today
+    mean tomorrow, so 00:30 scheduled at 23:00 waits until after midnight.
+    Returns None for blank or invalid times."""
+    if not time_str:
+        return None
+    try:
+        hour, minute = map(int, time_str.split(":"))
+        when = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    except ValueError:
+        return None
+    if when < now.replace(second=0, microsecond=0):
+        when += timedelta(days=1)
+    return when
+
+def target_key(t):
+    """Identifies a CSV row independent of its position in the list."""
+    return [t["target"], t["message"], t["time"]]
+
+def find_resume_index(targets, index, key):
+    """Where to resume: the checkpointed target's current position, even if the CSV
+    was edited or re-sorted. None if that target is no longer in the list."""
+    if key is None:  # old-format checkpoint or past the end of the list
+        return index
+    for i, t in enumerate(targets):
+        if target_key(t) == key:
+            return i
+    return None
+
 def load_checkpoint():
-    """Returns (target_index, repeat_index) tuple."""
+    """Returns (target_index, repeat_index, target_key) tuple."""
     if os.path.exists(CONFIG["checkpoint_file"]):
         with open(CONFIG["checkpoint_file"], 'r') as f:
             data = json.load(f)
-            return data.get("last_index", 0), data.get("last_repeat", 0)
-    return 0, 0
+            return data.get("last_index", 0), data.get("last_repeat", 0), data.get("target")
+    return 0, 0, None
 
-def save_checkpoint(index, repeat=0):
-    """Save both target index and repeat progress."""
+def save_checkpoint(index, repeat=0, key=None):
+    """Save target index, repeat progress, and which target that index refers to."""
     with open(CONFIG["checkpoint_file"], 'w') as f:
-        json.dump({"last_index": index, "last_repeat": repeat}, f)
+        json.dump({"last_index": index, "last_repeat": repeat, "target": key}, f)
 
 def clear_checkpoint():
     if os.path.exists(CONFIG["checkpoint_file"]):
