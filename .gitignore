@@ -1,0 +1,28 @@
+# --- Personal / sensitive data ---
+# Chrome profile holding the logged-in WhatsApp session (auth tokens, chats)
+whatsapp_session/
+# Recipient lists (phone numbers, names) and send progress
+data/*
+!data/.gitkeep
+*.csv
+# Run logs
+log.txt
+log.txt.*
+*.log
+# Secrets, just in case
+.env
+.env.*
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# --- Editor / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
